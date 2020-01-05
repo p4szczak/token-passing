@@ -5,7 +5,8 @@
 #include <unistd.h>
 #define MSG_TOKEN 100
 #define MSG_ACK 101
-#define HEARTBEAT 10
+#define HEARTBEAT 1
+#define PROBABILITY_OF_LOSS 30
 
 /*
  * -1 -> no token
@@ -27,28 +28,39 @@ pthread_mutex_t shouldSendMutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 void *receive(void *input){
+	time_t t;
+	srand((unsigned) time(&t));
+	
 	int size = ((struct mpiData*)input)->size;
 	int rank = ((struct mpiData*)input)->rank;
 	int tempToken;
 	MPI_Status status;
 	int ack = 2;
 	int predecessor = (rank + (size - 1)) % size;
+
 	while(1){
-		//printf("|%d| I am waiting for a token\n", rank);
-		MPI_Recv(&tempToken, 1, MPI_INT, predecessor, MPI_ANY_TAG, MPI_COMM_WORLD, &status );	
-		//printf("|%d| Received token -> %d\n", rank, tempToken);
+		// printf("|%d| I am waiting for a token\n", rank);
+		MPI_Recv(&tempToken, 1, MPI_INT, predecessor, MPI_ANY_TAG, MPI_COMM_WORLD, &status );
+
+		if((rand() % 100) < PROBABILITY_OF_LOSS){
+			// printf("|%d| loss |%d| GOD DAMMIT!\tGOD DAMMIT!\tGOD DAMMIT!\n", rank, tempToken);
+			continue;
+		}
+		// printf("|%d| Received token -> %d\n", rank, tempToken);
+
 		//if i am still sending tokens that means I have not receive acknowledge of recently send token
-		if(shouldSend){
+		if(shouldSend && (tempToken == ack || tempToken == expectedToken)){
 			pthread_mutex_lock(&shouldSendMutex);
 			shouldSend = 0;
-			printf("|%d| Received %d, stop sending\n", rank, tempToken);
+			// printf("|%d| Received %d, stop sending\n", rank, tempToken);
 			pthread_mutex_unlock(&shouldSendMutex);
 		}
-		//condition tempToken == 2 is obligatory because node should not send token away just acknowledges
-		else if(!shouldSend && tempToken == 2){
+		//condition tempToken == ack is obligatory because node should not send token away, just acknowledges
+		else if(!shouldSend && tempToken == ack){
 			MPI_Send(&tempToken, 1, MPI_INT, (rank + 1) % size, MSG_ACK, MPI_COMM_WORLD);
 		}
 
+		// printf("!!!!!!!!!!!!!!!!!!!!!|%d| Received |%d| expecting |%d|\n", rank, tempToken, expectedToken);
 		if(tempToken == expectedToken){
 			pthread_mutex_lock(&tokenMutex);
 			token = tempToken;
@@ -68,9 +80,9 @@ void send(int token, int rank,int size){
 		sendedToken = (sendedToken + 1) % 2;
 	}
 	while(shouldSend){
-		// printf("|%d| I am sending a token\n", rank);
 		MPI_Send(&sendedToken, 1, MPI_INT, (rank + 1) % size, MSG_TOKEN, MPI_COMM_WORLD);
 		sleep(HEARTBEAT);
+		// printf("|%d| I am RETRANSMITTING a token %d\n", rank, sendedToken);
 	}
 }
 
