@@ -29,13 +29,13 @@ pthread_mutex_t shouldSendMutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *receive(void *input){
 	time_t t;
-	srand((unsigned) time(&t));
 	
 	int size = ((struct mpiData*)input)->size;
 	int rank = ((struct mpiData*)input)->rank;
+	srand((unsigned) time(&t) + rank);
 	int tempToken;
 	MPI_Status status;
-	int ack = 2;
+	int ack = rank + 2;
 	int predecessor = (rank + (size - 1)) % size;
 
 	while(1){
@@ -48,15 +48,20 @@ void *receive(void *input){
 		}
 		// printf("|%d| Received token -> %d\n", rank, tempToken);
 
+		// If received ack was sent by us (ack value equal to rank + 2, +2 is an encoding matter)
+		if(tempToken == rank + 2){
+			continue;
+		}
 		//if i am still sending tokens that means I have not receive acknowledge of recently send token
-		if(shouldSend && (tempToken == ack || tempToken == expectedToken)){
+		if(shouldSend && (tempToken >= 2 || tempToken == expectedToken)){
 			pthread_mutex_lock(&shouldSendMutex);
 			shouldSend = 0;
 			// printf("|%d| Received %d, stop sending\n", rank, tempToken);
 			pthread_mutex_unlock(&shouldSendMutex);
+			MPI_Send(&tempToken, 1, MPI_INT, (rank + 1) % size, MSG_ACK, MPI_COMM_WORLD);
 		}
 		//condition tempToken == ack is obligatory because node should not send token away, just acknowledges
-		else if(!shouldSend && tempToken == ack){
+		else if(!shouldSend && tempToken >= 2){
 			MPI_Send(&tempToken, 1, MPI_INT, (rank + 1) % size, MSG_ACK, MPI_COMM_WORLD);
 		}
 
@@ -71,18 +76,18 @@ void *receive(void *input){
 }
 
 void send(int token, int rank,int size){
-	int sendedToken = token;
+	int sentToken = token;
 
 	pthread_mutex_lock(&shouldSendMutex);
 	shouldSend = 1;
 	pthread_mutex_unlock(&shouldSendMutex);
 	if(rank == 0){
-		sendedToken = (sendedToken + 1) % 2;
+		sentToken = (sentToken + 1) % 2;
 	}
 	while(shouldSend){
-		MPI_Send(&sendedToken, 1, MPI_INT, (rank + 1) % size, MSG_TOKEN, MPI_COMM_WORLD);
+		MPI_Send(&sentToken, 1, MPI_INT, (rank + 1) % size, MSG_TOKEN, MPI_COMM_WORLD);
 		sleep(HEARTBEAT);
-		// printf("|%d| I am RETRANSMITTING a token %d\n", rank, sendedToken);
+		// printf("|%d| I am RETRANSMITTING a token %d\n", rank, sentToken);
 	}
 }
 
